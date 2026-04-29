@@ -1,0 +1,100 @@
+# =============================================================================
+# MedTruth AI — Python Dependencies
+# Resolved for Python 3.12 · macOS arm64 (M1/M2/M3) · April 2026
+#
+# Conflict map (see DEPENDENCY_NOTES below):
+#   spacy 3.7.x  pins typer<0.10 AND weasel<0.4 → upgrade to 3.8.x
+#   chromadb 0.5.x pins tokenizers<=0.20.3 → cap transformers at 4.46.3
+#   sentence-transformers 2.x requires transformers<5 → safe to upgrade to 3.x
+# =============================================================================
+
+# ── Core API ──────────────────────────────────────────────────────────────────
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+pydantic==2.7.1
+python-dotenv==1.0.1
+
+# ── HTTP clients ──────────────────────────────────────────────────────────────
+httpx==0.27.0
+pymongo==4.8.0
+
+# ── Anthropic SDK (RAG generation + plain language) ───────────────────────────
+anthropic==0.28.0
+
+# ── Embeddings + NLP ──────────────────────────────────────────────────────────
+# sentence-transformers: 3.x required — 2.7.0 is incompatible with transformers>=4.44
+sentence-transformers==3.4.1
+
+# transformers: capped at 4.46.3 — highest version tokenizers==0.20.3 supports.
+# 4.47.0 bumped the tokenizers lower bound to >=0.21, which chromadb 0.5.x blocks.
+transformers==4.46.3
+
+# tokenizers: explicit pin required. chromadb 0.5.x hard-caps at <=0.20.3.
+# Do NOT upgrade until chromadb is moved to 1.x.
+tokenizers==0.20.3
+
+# torch: 2.3.0 ships native arm64 (MPS) wheels for Python 3.12.
+# Satisfies sentence-transformers, transformers, and thinc (via spacy).
+torch==2.3.0
+
+# spacy: 3.8.x widens typer constraint to <1.0.0 (was <0.10.0 in 3.7.x)
+# and widens weasel to <0.5.0 (was <0.4.0 in 3.7.x).
+# Both of these were the root cause of the typer/weasel conflicts.
+spacy==3.8.4
+
+# ── Vector store ──────────────────────────────────────────────────────────────
+# chromadb: 0.5.23 is the final 0.5.x release. Do NOT jump to 1.x —
+# chromadb 1.0 changed PersistentClient to async-only, breaking our sync code.
+# 0.5.23 vs 0.5.0: includes grpcio fixes, onnxruntime arm64 improvements,
+# and the tokenizers<=0.20.3 constraint is consistent across all 0.5.x.
+chromadb==0.5.23
+
+# ── Graph control flow ────────────────────────────────────────────────────────
+# langgraph: structured state-graph pipeline (src/rag/graph_pipeline.py).
+# Pulls in langchain-core which only needs pydantic>=2 and httpx — no conflict
+# with the pinned tokenizers/transformers/chromadb stack.
+langgraph>=0.2.0,<1.0
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+# numpy 1.26.x: last version before 2.0 ABI break.
+# All of torch/transformers/spacy/chromadb are compatible with 1.26.x.
+# numpy 2.x is NOT yet safe with torch 2.3.0 on arm64.
+numpy==1.26.4
+
+# =============================================================================
+# DEPENDENCY_NOTES
+# =============================================================================
+#
+# CONFLICT 1 — typer (spacy 3.7.x vs chromadb)
+#   spacy==3.7.4  requires: typer>=0.3.0,<0.10.0
+#   chromadb      requires: typer>=0.9.0          (no upper bound)
+#   At typer==0.9.x these technically overlap, but any chromadb update
+#   would pull typer>=0.10 and immediately break spacy 3.7.x.
+#   Fix: spacy==3.8.4 requires typer>=0.3.0,<1.0.0 — safely covers 0.9.x–0.24.x.
+#
+# CONFLICT 2 — weasel (spacy 3.7.x)
+#   spacy==3.7.4  requires: weasel>=0.1.0,<0.4.0
+#   spacy==3.8.4  requires: weasel>=0.1.0,<0.5.0
+#   Several other spacy-ecosystem packages pull weasel==0.4.x, which was
+#   blocked by the <0.4.0 cap. Fix: upgrade to spacy 3.8.x.
+#
+# CONFLICT 3 — tokenizers (chromadb 0.5.x vs transformers)
+#   chromadb==0.5.x    requires: tokenizers>=0.13.2,<=0.20.3
+#   transformers==4.47+ requires: tokenizers>=0.21
+#   The tokenizers 0.20→0.21 boundary is a hard incompatibility.
+#   transformers==4.46.3 is the highest version whose tokenizers lower bound
+#   is satisfied by tokenizers==0.20.3.
+#   Fix: pin transformers==4.46.3 and tokenizers==0.20.3 explicitly.
+#
+# NUMPY 2.x NOTE
+#   numpy 2.0 introduced a C-level ABI break. torch 2.3.0 was released before
+#   this ABI break and its arm64 wheels link against numpy 1.x. Running with
+#   numpy 2.x will produce import warnings and may cause silent numerical errors.
+#   Upgrade torch to >=2.4.0 before upgrading numpy to 2.x.
+#
+# CHROMADB 1.x NOTE
+#   chromadb 1.0.0 made PersistentClient fully async (aiohttp-based).
+#   src/vector_store/chroma_store.py uses the synchronous 0.5.x API.
+#   Migration to 1.x requires rewriting chroma_store.py with async/await.
+#   Until that migration is done, stay on 0.5.23.
+# =============================================================================
