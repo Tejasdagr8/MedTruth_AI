@@ -4,10 +4,13 @@ Accepts pre-retrieved docs or triggers a fresh retrieval for a query.
 """
 
 import asyncio
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 from api.dependencies import (
     get_cochrane_client,
@@ -52,6 +55,7 @@ async def contradictions_endpoint(
     all_docs = []
     for result in results:
         if isinstance(result, Exception):
+            logger.warning("Retrieval source failed in /contradictions: %s", result)
             continue
         for item in result:
             all_docs.append(item.to_retrieval_doc())

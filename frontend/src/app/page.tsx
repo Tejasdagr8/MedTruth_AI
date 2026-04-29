@@ -142,7 +142,11 @@ export default function Home() {
           .map((item) => ({ query: item.query, answer: item.answer, savedAt: item.saved_at }));
         setSavedAnswers(deduped.slice(0, 10));
       })
-      .catch(() => undefined);
+      .catch((err: unknown) => {
+        if (!mounted) return;
+        console.error("Failed to load user history:", err);
+        // Non-fatal — sidebar history just stays empty; do not interrupt chat UX.
+      });
     return () => {
       mounted = false;
     };
@@ -339,6 +343,11 @@ export default function Home() {
                         ))
                       : "Loading..."}
                   </div>
+                  {activeResult?.request_id && (
+                    <p className="mt-2 font-mono text-[11px] text-slate-500 dark:text-slate-600">
+                      Last request_id: <span className="select-all text-slate-400">{activeResult.request_id}</span>
+                    </p>
+                  )}
                 </div>
               </div>
             </div>

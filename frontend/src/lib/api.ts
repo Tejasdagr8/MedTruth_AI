@@ -95,6 +95,8 @@ export interface QueryResponse {
   related_questions?: string[];
   // Task 3: Selection rationale
   selection_rationale?: SelectionRationale;
+  // Populated client-side from X-Request-ID response header; not sent by the backend JSON body.
+  request_id?: string;
 }
 
 export interface SavedAnswer {
@@ -184,7 +186,9 @@ export async function queryMedTruth(
     const text = await res.text();
     throw new Error(text || "Request failed");
   }
-  return res.json();
+  const data = (await res.json()) as QueryResponse;
+  data.request_id = res.headers.get("X-Request-ID") ?? undefined;
+  return data;
 }
 
 export async function explainAnswer(payload: { query: string; answer: string }): Promise<string> {
@@ -209,6 +213,7 @@ export async function validateSource(params: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
   });
+  if (!res.ok) throw new Error(`Validation request failed: ${res.status}`);
   return res.json();
 }
 

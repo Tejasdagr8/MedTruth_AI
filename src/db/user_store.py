@@ -5,6 +5,7 @@ Mongo-backed user profile store for query history and saved answers.
 import os
 import hashlib
 import logging
+import time
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
@@ -18,6 +19,10 @@ MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 MONGO_DB = os.getenv("MONGO_DB", "medtruth_ai")
 logger = logging.getLogger(__name__)
 
+# When Mongo is unreachable, wait this long before attempting another ping.
+# Without this, every persistent_available check blocks for serverSelectionTimeoutMS (1.5 s).
+_CONNECT_RETRY_TTL = 10.0  # seconds
+
 
 class UserStore:
     def __init__(self, mongo_uri: str = MONGO_URI, db_name: str = MONGO_DB):
@@ -26,9 +31,11 @@ class UserStore:
         self._memory: dict[str, dict[str, Any]] = {}
         self._users: Collection | None = None
         self._persistent_available = False
+        self._last_connect_attempt: float = 0.0
         self._connect()
 
     def _connect(self) -> None:
+        self._last_connect_attempt = time.monotonic()
         try:
             self._client = MongoClient(self._mongo_uri, serverSelectionTimeoutMS=1500)
             self._db = self._client[self._db_name]
@@ -43,14 +50,23 @@ class UserStore:
             self._users = None
             self._persistent_available = False
 
+    def _should_retry_connect(self) -> bool:
+        """True when enough time has passed to attempt another Mongo ping."""
+        return time.monotonic() - self._last_connect_attempt >= _CONNECT_RETRY_TTL
+
     @property
     def persistent_available(self) -> bool:
-        if not self._persistent_available:
+        if self._persistent_available:
+            return True
+        # Rate-limit reconnect attempts — avoid 1.5 s penalty on every request when Mongo is down.
+        if self._should_retry_connect():
             self._connect()
         return self._persistent_available
 
     def _ensure_users_collection(self) -> Collection | None:
-        if self._users is None or not self._persistent_available:
+        if self._users is not None and self._persistent_available:
+            return self._users
+        if self._should_retry_connect():
             self._connect()
         return self._users
 
@@ -242,11 +258,72 @@ class UserStore:
             ]
             return len(user["saved_answers"]) < before
 
-        result = users.update_one(
-            {"email": email},
-            {"$pull": {"saved_answers": {"answer_hash": answer_hash}}},
-        )
-        return result.modified_count > 0
+        try:
+            result = users.update_one(
+                {"email": email},
+                {"$pull": {"saved_answers": {"answer_hash": answer_hash}}},
+            )
+            return result.modified_count > 0
+        except PyMongoError:
+            logger.exception("Failed to delete saved answer %s for %s", answer_hash, email)
+            raise
+
+    def list_users(self) -> list[dict[str, Any]]:
+        """Return a summary row for every user (for the admin panel users table)."""
+        users = self._ensure_users_collection()
+        if users is None:
+            return [
+                {
+                    "email": u["email"],
+                    "name": u.get("name") or "",
+                    "usage_count": u.get("usage_count", 0),
+                    "saved_answers_count": len(u.get("saved_answers", [])),
+                    "last_query": (u.get("query_history") or [None])[-1],
+                }
+                for u in self._memory.values()
+            ]
+        try:
+            docs = list(users.find(
+                {},
+                {"_id": 0, "email": 1, "name": 1, "usage_count": 1,
+                 "saved_answers": 1, "query_history": 1},
+            ))
+        except PyMongoError:
+            logger.exception("list_users failed")
+            return []
+        return [
+            {
+                "email": d.get("email", ""),
+                "name": d.get("name") or "",
+                "usage_count": d.get("usage_count", 0),
+                "saved_answers_count": len(d.get("saved_answers", [])),
+                "last_query": (d.get("query_history") or [None])[-1],
+            }
+            for d in docs
+        ]
+
+    def get_recent_activity(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Return the most recent queries across all users (no timestamps — best-effort)."""
+        users = self._ensure_users_collection()
+        if users is None:
+            items: list[dict[str, Any]] = []
+            for u in self._memory.values():
+                for q in reversed(u.get("query_history", [])[-5:]):
+                    items.append({"email": u["email"], "query": q})
+            return items[:limit]
+        try:
+            docs = list(users.find(
+                {"query_history.0": {"$exists": True}},
+                {"_id": 0, "email": 1, "query_history": 1},
+            ).limit(20))
+        except PyMongoError:
+            logger.exception("get_recent_activity failed")
+            return []
+        items = []
+        for doc in docs:
+            for q in reversed((doc.get("query_history") or [])[-5:]):
+                items.append({"email": doc.get("email", ""), "query": q})
+        return items[:limit]
 
     def get_user(self, email: str) -> dict[str, Any]:
         users = self._ensure_users_collection()

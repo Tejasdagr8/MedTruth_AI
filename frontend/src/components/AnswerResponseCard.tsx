@@ -294,7 +294,7 @@ export default function AnswerResponseCard({
         )}
 
         <p className="mt-3 text-[11px] text-slate-500 dark:text-slate-400">
-          Hover a sentence to preview its source · click to jump to the evidence panel
+          Hover a cited sentence [n] to preview its source · click to jump
         </p>
       </div>
 
@@ -305,11 +305,21 @@ export default function AnswerResponseCard({
             .split(/(?<=[.!?])\s+/)
             .filter(Boolean)
             .map((sentence, i) => {
-              const citation = result.citations[i % Math.max(1, result.citations.length)];
-              const sourceIndex = citation?.index ?? 1;
-              if (isGeneralMode) {
+              // General mode and patient mode: plain, non-interactive text.
+              if (isGeneralMode || patientMode) {
                 return <p key={`${sentence}-${i}`}>{sentence}</p>;
               }
+              // Parse the first [n] citation marker embedded in the sentence by the backend.
+              // Round-robin (i % citations.length) was factually wrong — a sentence at
+              // position 5 does NOT necessarily cite source [3].
+              const markerMatch = sentence.match(/\[(\d+)\]/);
+              const sourceIndex = markerMatch ? parseInt(markerMatch[1], 10) : null;
+
+              // No citation marker → plain, non-clickable text.
+              if (sourceIndex === null) {
+                return <p key={`${sentence}-${i}`}>{sentence}</p>;
+              }
+
               return (
                 <button
                   key={`${sentence}-${i}`}
@@ -318,10 +328,7 @@ export default function AnswerResponseCard({
                   onClick={() => onSentenceClick(sourceIndex)}
                   className="block cursor-pointer rounded-md text-left transition-colors hover:bg-blue-100/50 dark:hover:bg-slate-700/40"
                 >
-                  {sentence}{" "}
-                  {!patientMode && (
-                    <span className="text-sm font-medium text-blue-500 dark:text-blue-400">[{sourceIndex}]</span>
-                  )}
+                  {sentence}
                 </button>
               );
             })}

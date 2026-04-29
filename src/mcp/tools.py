@@ -3,9 +3,14 @@ LLM Lab tool implementations.
 
 Lightweight wrappers — no MEDEVA scoring, no trust filtering.
 Output is normalized into a structured format that is easier for the LLM to reason over.
+
+Improvements applied:
+  ✓ #5 — In-memory result cache for pubmed_search (5-min TTL, keyed by SHA-256)
 """
 
+import hashlib
 import re
+import time
 import xml.etree.ElementTree as ET
 
 import httpx
@@ -16,6 +21,10 @@ EFETCH_URL  = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
 # Per-article limits
 _ABSTRACT_MAX_CHARS = 800
 _MAX_RESULTS_DEFAULT = 5
+
+# ── PubMed result cache ───────────────────────────────────────────────────────
+_PUBMED_CACHE_TTL = 300  # seconds (5 min)
+_pubmed_cache: dict[str, tuple[str, float]] = {}  # key → (result, cached_at)
 
 
 def _infer_study_type(text: str) -> str:
@@ -88,7 +97,15 @@ async def pubmed_search(query: str, max_results: int = _MAX_RESULTS_DEFAULT) -> 
     """
     Search PubMed and return normalized, structured article summaries.
     Each result is formatted as a labelled block — no raw XML passed to the LLM.
+    Results are cached in-memory for 5 minutes to reduce latency and API load.
     """
+    cache_key = hashlib.sha256(f"{query}:{max_results}".encode()).hexdigest()
+    cached = _pubmed_cache.get(cache_key)
+    if cached is not None:
+        result, cached_at = cached
+        if time.time() - cached_at < _PUBMED_CACHE_TTL:
+            return result
+
     async with httpx.AsyncClient(timeout=9.0) as client:
         resp = await client.get(ESEARCH_URL, params={
             "db": "pubmed",
@@ -130,7 +147,11 @@ async def pubmed_search(query: str, max_results: int = _MAX_RESULTS_DEFAULT) -> 
             results.append(_format_article(i, title, journal, year, abstract))
 
     if not results:
-        return "PubMed returned no abstracts for this query."
+        empty = "PubMed returned no abstracts for this query."
+        _pubmed_cache[cache_key] = (empty, time.time())
+        return empty
 
     header = f"Found {len(results)} result(s) for: {query!r}\n"
-    return header + "\n\n".join(results)
+    output = header + "\n\n".join(results)
+    _pubmed_cache[cache_key] = (output, time.time())
+    return output

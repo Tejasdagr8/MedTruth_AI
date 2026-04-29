@@ -42,7 +42,7 @@ def translate_to_plain_language(technical_answer: str) -> str:
         f"Remember to keep all citation markers like [1], [2], etc.\n\n"
         f"MEDICAL ANSWER:\n{technical_answer}"
     )
-    plain, _provider = generate_text_with_fallback(
+    plain, _, _ = generate_text_with_fallback(
         system_prompt=PLAIN_LANGUAGE_SYSTEM,
         user_prompt=user_prompt,
         max_tokens=1024,

@@ -423,7 +423,7 @@ class MedTruthPipeline:
             try:
                 semantic_similarities = self.vector_store.get_semantic_similarities(query, top_docs)
             except Exception:
-                pass
+                logger.warning("Semantic similarity computation failed — confidence scoring will be approximate", exc_info=True)
 
         transition = "filter_rank->generate" if top_docs else "filter_rank->general_explanation"
         failure_path = no_docs_reason if no_docs_reason else None

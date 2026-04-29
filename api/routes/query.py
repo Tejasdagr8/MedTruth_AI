@@ -13,11 +13,13 @@ Flow (simplified by graph_pipeline.py):
 import asyncio
 import hashlib
 import logging
+import os
 import re
 import time
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from api.dependencies import (
@@ -27,7 +29,9 @@ from api.dependencies import (
     get_pubmed_client,
     get_who_client,
 )
+from api.failure_log import record_failure as _record_failure
 from src.llm.fallback_client import get_provider_metrics
+from src.observability import request_id as _request_id
 from src.rag.graph_pipeline import MedTruthPipeline, PipelineState
 from src.retrieval.domain_classifier import detect_domain
 from src.retrieval.query_refiner import refine_query
@@ -37,6 +41,10 @@ router = APIRouter()
 user_store = UserStore()
 EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 logger = logging.getLogger(__name__)
+
+# Global cap on the refine + retrieve + pipeline wall time.
+# Configurable via env so ops can tune without a redeploy.
+QUERY_PIPELINE_TIMEOUT_S = float(os.getenv("QUERY_PIPELINE_TIMEOUT_S", "45"))
 
 QUERY_MODE_CACHE_TTL_SECONDS = 60
 _QUERY_MODE_CACHE: dict[str, tuple[float, dict]] = {}
@@ -182,48 +190,30 @@ async def _retrieve_all(
     return all_docs
 
 
-# ── Main endpoint ─────────────────────────────────────────────────────────────
+# ── Pipeline helper ───────────────────────────────────────────────────────────
 
-@router.post("/query", response_model=QueryResponse)
-async def query_endpoint(
-    request: QueryRequest,
-    pubmed=Depends(get_pubmed_client),
-    europepmc=Depends(get_europepmc_client),
-    who=Depends(get_who_client),
-    cochrane=Depends(get_cochrane_client),
-    pipeline: MedTruthPipeline = Depends(get_pipeline),
-    x_user_email: str | None = Header(default=None),
-):
-    original_query = request.query
+async def _run_pipeline(
+    original_query: str,
+    effective_query: str,
+    was_expanded: bool,
+    domain: str,
+    req: QueryRequest,
+    pubmed,
+    europepmc,
+    who,
+    cochrane,
+    pipeline: MedTruthPipeline,
+) -> tuple[str, str, PipelineState]:
+    """
+    The slow part of the query flow: refine → retrieve → LangGraph pipeline.
+    Extracted so it can be wrapped in asyncio.wait_for by the endpoint.
+    Returns (effective_query_after_refinement, refiner_status, pipeline_state).
+    """
+    refined = await asyncio.to_thread(refine_query, effective_query)
+    effective = refined.refined_query
 
-    # 1. User activity tracking (before cache so cached requests still count)
-    if x_user_email and is_valid_email(x_user_email):
-        user_store.record_query(x_user_email.lower(), original_query)
-
-    # 1. Cache check
-    cache_key = _cache_key(
-        original_query,
-        request.top_k,
-        request.enable_entailment_check,
-        request.enable_contradiction_check,
-    )
-    if cached := _read_cache(cache_key):
-        _record_mode_metrics(cached, cache_hit=True)
-        return cached
-
-    # 2. Broad-query keyword expansion (fast heuristic, runs before LLM refiner)
-    effective_query, was_expanded = _expand_query_if_broad(original_query)
-
-    # 3. LLM query refinement (single call; failures are surfaced via status)
-    refined = refine_query(effective_query)
-    effective_query = refined.refined_query
-    refiner_status = refined.status
-
-    domain = detect_domain(original_query)
-
-    # 4. Async retrieval — pass expanded_terms to PubMed + EuropePMC
     raw_docs = await _retrieve_all(
-        effective_query,
+        effective,
         pubmed,
         europepmc,
         who,
@@ -231,17 +221,15 @@ async def query_endpoint(
         expanded_terms=refined.expanded_terms or None,
     )
 
-    # 5. Graph pipeline — all post-retrieval logic (filtering, ranking, generation, verification)
     initial_state: PipelineState = {
         "original_query": original_query,
-        "effective_query": effective_query,
+        "effective_query": effective,
         "domain": domain,
-        "top_k": request.top_k,
-        "enable_entailment_check": request.enable_entailment_check,
-        "enable_contradiction_check": request.enable_contradiction_check,
+        "top_k": req.top_k,
+        "enable_entailment_check": req.enable_entailment_check,
+        "enable_contradiction_check": req.enable_contradiction_check,
         "was_expanded": was_expanded,
         "raw_docs": raw_docs,
-        # Fields populated by graph nodes (initialised to safe defaults)
         "trusted_docs": [],
         "rejected_docs": [],
         "top_docs": [],
@@ -277,7 +265,90 @@ async def query_endpoint(
         "failure_paths": [],
     }
 
-    state = pipeline.run(initial_state)
+    state = await asyncio.to_thread(pipeline.run, initial_state)
+    return effective, refined.status, state
+
+
+# ── Main endpoint ─────────────────────────────────────────────────────────────
+
+@router.post("/query", response_model=QueryResponse)
+async def query_endpoint(
+    request: QueryRequest,
+    pubmed=Depends(get_pubmed_client),
+    europepmc=Depends(get_europepmc_client),
+    who=Depends(get_who_client),
+    cochrane=Depends(get_cochrane_client),
+    pipeline: MedTruthPipeline = Depends(get_pipeline),
+    x_user_email: str | None = Header(default=None),
+):
+    original_query = request.query
+
+    # 1. User activity tracking — non-critical; never blocks query processing
+    if x_user_email and is_valid_email(x_user_email):
+        try:
+            user_store.record_query(x_user_email.lower(), original_query)
+        except Exception:
+            logger.warning("record_query failed for %s — continuing", x_user_email, exc_info=True)
+
+    # 1. Cache check
+    cache_key = _cache_key(
+        original_query,
+        request.top_k,
+        request.enable_entailment_check,
+        request.enable_contradiction_check,
+    )
+    if cached := _read_cache(cache_key):
+        _record_mode_metrics(cached, cache_hit=True)
+        return cached
+
+    # 2. Instant path — no I/O, no LLM
+    effective_query, was_expanded = _expand_query_if_broad(original_query)
+    domain = detect_domain(original_query)
+
+    # 3–5. Slow path: refine → retrieve → pipeline (all I/O; guarded by global timeout)
+    rid = _request_id.get()
+    t0 = time.perf_counter()
+    logger.info("[query] rid=%s status=start query=%r", rid, original_query[:80])
+    try:
+        effective_query, refiner_status, state = await asyncio.wait_for(
+            _run_pipeline(
+                original_query, effective_query, was_expanded, domain,
+                request, pubmed, europepmc, who, cochrane, pipeline,
+            ),
+            timeout=QUERY_PIPELINE_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        duration_ms = (time.perf_counter() - t0) * 1000
+        logger.warning(
+            "[query] rid=%s status=timeout limit_s=%.0f duration_ms=%.0f query=%r",
+            rid, QUERY_PIPELINE_TIMEOUT_S, duration_ms, original_query[:80],
+        )
+        return JSONResponse(
+            status_code=504,
+            content={
+                "error": (
+                    f"Request timed out after {QUERY_PIPELINE_TIMEOUT_S:.0f}s. "
+                    "Please try a more specific query or try again shortly."
+                ),
+                "request_id": rid,
+            },
+        )
+
+    duration_ms = (time.perf_counter() - t0) * 1000
+    logger.info(
+        "[query] rid=%s status=done mode=%s provider=%s confidence=%.2f duration_ms=%.0f",
+        rid, state["mode"], state["provider_used"], state["confidence"], duration_ms,
+    )
+
+    # Capture non-evidence responses for the admin failure panel.
+    if state["mode"] in {"fallback", "evidence_only"} and state.get("fallback_reason"):
+        _record_failure(
+            request_id=rid,
+            query=original_query,
+            mode=state["mode"],
+            fallback_reason=state["fallback_reason"],
+            provider_used=state.get("provider_used") or "none",
+        )
 
     # 6. Assemble QueryResponse from final pipeline state
     response = QueryResponse(

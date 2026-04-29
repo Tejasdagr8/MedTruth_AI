@@ -34,6 +34,7 @@ export default function ProfilePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deletingHash, setDeletingHash] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const load = async () => {
     if (!session?.user?.email) return;
@@ -61,6 +62,7 @@ export default function ProfilePage() {
   const handleDelete = async (item: SavedAnswer) => {
     if (!session?.user?.email || !item.answer_hash) return;
     setDeletingHash(item.answer_hash);
+    setDeleteError(null);
     try {
       await deleteSavedAnswer(session.user.email, item.answer_hash);
       setProfile((prev) =>
@@ -73,8 +75,11 @@ export default function ProfilePage() {
             }
           : prev
       );
-    } catch {
-      // Silent — deletion failure is non-critical
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Failed to delete answer. Please try again.";
+      setDeleteError(msg);
+      // Auto-dismiss after 4 s so the banner doesn't linger.
+      setTimeout(() => setDeleteError(null), 4000);
     } finally {
       setDeletingHash(null);
     }
@@ -122,6 +127,11 @@ export default function ProfilePage() {
 
         {loading && <div className="text-sm text-slate-600">Loading your data...</div>}
         {error && <div className="text-sm text-red-600">Error: {error}</div>}
+        {deleteError && (
+          <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300">
+            {deleteError}
+          </div>
+        )}
 
         {!loading && !error && profile && (
           <div className="grid gap-4 md:grid-cols-2">

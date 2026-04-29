@@ -5,6 +5,7 @@ Primary: Groq (fast, cheap)
 Fallback: Gemini → Anthropic → Ollama (local)
 """
 
+import logging
 import os
 import re
 import time
@@ -12,6 +13,10 @@ from typing import Callable, Optional
 
 import anthropic
 import httpx
+
+from src.observability import request_id as _request_id
+
+logger = logging.getLogger(__name__)
 
 
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
@@ -24,10 +29,10 @@ MAX_RETRIES = int(os.getenv("LLM_PROVIDER_MAX_RETRIES", "2"))
 RETRY_BACKOFF_SECONDS = float(os.getenv("LLM_PROVIDER_RETRY_BACKOFF_SECONDS", "0.4"))
 _LAST_SUCCESS_PROVIDER: Optional[str] = None
 _PROVIDER_METRICS: dict[str, dict[str, float | int]] = {
-    "anthropic": {"success": 0, "failure": 0, "last_latency_ms": 0.0},
-    "groq": {"success": 0, "failure": 0, "last_latency_ms": 0.0},
-    "gemini": {"success": 0, "failure": 0, "last_latency_ms": 0.0},
-    "ollama": {"success": 0, "failure": 0, "last_latency_ms": 0.0},
+    "anthropic": {"success": 0, "failure": 0, "last_latency_ms": 0.0, "last_fail_latency_ms": 0.0},
+    "groq":      {"success": 0, "failure": 0, "last_latency_ms": 0.0, "last_fail_latency_ms": 0.0},
+    "gemini":    {"success": 0, "failure": 0, "last_latency_ms": 0.0, "last_fail_latency_ms": 0.0},
+    "ollama":    {"success": 0, "failure": 0, "last_latency_ms": 0.0, "last_fail_latency_ms": 0.0},
 }
 
 
@@ -37,8 +42,17 @@ class ProviderFallbackError(RuntimeError):
         self.attempts = attempts
 
 
-def get_provider_metrics() -> dict[str, dict[str, float | int]]:
-    return {k: dict(v) for k, v in _PROVIDER_METRICS.items()}
+def get_provider_metrics() -> dict[str, dict[str, float | int | None]]:
+    """Return a snapshot with derived fields (total_calls, success_rate) computed server-side."""
+    result: dict[str, dict[str, float | int | None]] = {}
+    for name, m in _PROVIDER_METRICS.items():
+        total = int(m["success"]) + int(m["failure"])
+        result[name] = {
+            **m,
+            "total_calls":   total,
+            "success_rate":  round(int(m["success"]) / total, 3) if total > 0 else None,
+        }
+    return result
 
 
 def _generate_with_anthropic(system_prompt: str, user_prompt: str, max_tokens: int) -> str:
@@ -196,8 +210,8 @@ def generate_text_with_fallback(
         ("ollama", _generate_with_ollama, os.getenv("OLLAMA_ENABLED", "false").lower() == "true"),
     ]
 
-    # Stickiness: prioritize last successful provider only if it isn't failing heavily.
-    if _LAST_SUCCESS_PROVIDER and _PROVIDER_METRICS[_LAST_SUCCESS_PROVIDER]["failure"] < 3:
+    # Stickiness: prioritize last successful provider only if its failure count is low.
+    if _LAST_SUCCESS_PROVIDER and int(_PROVIDER_METRICS[_LAST_SUCCESS_PROVIDER]["failure"]) < 3:
         providers.sort(key=lambda p: 0 if p[0] == _LAST_SUCCESS_PROVIDER else 1)
 
     for provider_name, fn, available in providers:
@@ -213,15 +227,36 @@ def generate_text_with_fallback(
                 text = fn(system_prompt, user_prompt, max_tokens)
                 if not text.strip():
                     raise RuntimeError(f"{provider_name} returned empty content")
+                latency_ms = round((time.perf_counter() - started) * 1000, 2)
                 _PROVIDER_METRICS[provider_name]["success"] += 1
-                _PROVIDER_METRICS[provider_name]["last_latency_ms"] = round((time.perf_counter() - started) * 1000, 2)
+                _PROVIDER_METRICS[provider_name]["last_latency_ms"] = latency_ms
                 _LAST_SUCCESS_PROVIDER = provider_name
+                rid = _request_id.get()
+                if attempt > 1:
+                    logger.info(
+                        "[LLM] rid=%s provider=%s attempt=%d/%d status=success latency_ms=%.0f",
+                        rid, provider_name, attempt, MAX_RETRIES, latency_ms,
+                    )
                 return text, provider_name, attempted
             except Exception as exc:
                 last_exc = exc
+                fail_latency_ms = round((time.perf_counter() - started) * 1000, 2)
+                # Record latency of every attempt — not just successes — so the
+                # admin health tab can distinguish "fast fail" from "slow timeout".
+                _PROVIDER_METRICS[provider_name]["last_fail_latency_ms"] = fail_latency_ms
+                rid = _request_id.get()
+                sanitized = _sanitize_error_message(str(exc))
                 if attempt < MAX_RETRIES and _is_retryable_error(exc):
+                    logger.warning(
+                        "[LLM] rid=%s provider=%s attempt=%d/%d status=retry reason=%s delay_s=%.1f",
+                        rid, provider_name, attempt, MAX_RETRIES, sanitized, RETRY_BACKOFF_SECONDS * attempt,
+                    )
                     time.sleep(RETRY_BACKOFF_SECONDS * attempt)
                 else:
+                    logger.warning(
+                        "[LLM] rid=%s provider=%s attempt=%d/%d status=failed reason=%s latency_ms=%.0f",
+                        rid, provider_name, attempt, MAX_RETRIES, sanitized, fail_latency_ms,
+                    )
                     break
         provider_errors[provider_name] = last_exc
         _PROVIDER_METRICS[provider_name]["failure"] += 1
