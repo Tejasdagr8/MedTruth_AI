@@ -20,6 +20,7 @@ import {
 interface AnswerResponseCardProps {
   query: string;
   result: QueryResponse;
+  currentUserEmail?: string;
   onSentenceHover: (sourceIndex: number | null) => void;
   onSentenceClick: (sourceIndex: number) => void;
   onSave?: () => void;
@@ -71,6 +72,7 @@ const SEVERE_THRESHOLD = 0.4;
 export default function AnswerResponseCard({
   query,
   result,
+  currentUserEmail,
   onSentenceHover,
   onSentenceClick,
   onSave,
@@ -477,8 +479,10 @@ export default function AnswerResponseCard({
       {/* ── Controlled discussion ──────────────────────────────────────────────── */}
       <div className="mt-2 border-t border-slate-100 px-6 pb-6 pt-6 dark:border-slate-800">
         <ControlledDiscussion
+          query={query}
           answer={result.answer ?? ""}
           evidenceTitles={result.citations.slice(0, 5).map((c) => c.title)}
+          userEmail={currentUserEmail}
           onQuerySuggestion={onRelatedQuery}
         />
       </div>

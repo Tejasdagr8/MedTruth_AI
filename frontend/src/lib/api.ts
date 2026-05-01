@@ -131,6 +131,22 @@ export interface CommentValidation {
   action: "approved" | "held_for_review" | "blocked" | "converted_to_query";
 }
 
+export interface DiscussionSubmission {
+  user_email: string;
+  query: string;
+  answer_id?: string | null;
+  comment: string;
+  validation: "VALID" | "QUESTION" | "MISINFORMATION";
+  confidence: number;
+  action: "approved" | "held_for_review" | "blocked" | "converted_to_query";
+  created_at: string;
+  reason?: string;
+  suggested_action?: string;
+  query_suggestion?: string | null;
+  anchor_sentence?: string | null;
+  anchor_citation_title?: string | null;
+}
+
 export interface ModesHealth {
   requests: number;
   cache_hits: number;
@@ -285,6 +301,27 @@ export async function validateComment(payload: {
     body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error("Moderation failed");
+  return res.json();
+}
+
+export async function submitDiscussion(
+  email: string,
+  payload: {
+    query: string;
+    answer_id?: string | null;
+    comment: string;
+    answer: string;
+    evidence_titles?: string[];
+    anchor_sentence?: string | null;
+    anchor_citation_title?: string | null;
+  }
+): Promise<{ status: string; submission: DiscussionSubmission; validation: CommentValidation }> {
+  const res = await fetch(`${API_BASE}/discuss/submit`, {
+    method: "POST",
+    headers: userHeaders(email),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error("Discussion submission failed");
   return res.json();
 }
 

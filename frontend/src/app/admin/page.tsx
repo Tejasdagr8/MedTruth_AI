@@ -36,6 +36,17 @@ type FailureItem = {
   timestamp: string;
 };
 
+type DiscussionItem = {
+  user_email: string;
+  query: string;
+  comment: string;
+  validation: "VALID" | "QUESTION" | "MISINFORMATION";
+  confidence: number;
+  action: "approved" | "held_for_review" | "blocked" | "converted_to_query";
+  created_at: string;
+  query_suggestion?: string | null;
+};
+
 type ProviderHealth = Record<string, {
   success: number;
   failure: number;
@@ -45,7 +56,7 @@ type ProviderHealth = Record<string, {
   last_fail_latency_ms: number;      // last failed attempt (0 if never failed)
 }>;
 
-type Tab = "users" | "activity" | "failures" | "health";
+type Tab = "users" | "activity" | "discussions" | "failures" | "health";
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 
@@ -71,6 +82,7 @@ export default function AdminPage() {
   const [users, setUsers]           = useState<AdminUser[]>([]);
   const [selectedUser, setSelectedUser] = useState<UserDetail | null>(null);
   const [activity, setActivity]     = useState<ActivityItem[]>([]);
+  const [discussions, setDiscussions] = useState<DiscussionItem[]>([]);
   const [failures, setFailures]     = useState<FailureItem[]>([]);
   const [providers, setProviders]   = useState<ProviderHealth>({});
   const [loading, setLoading]       = useState(false);
@@ -82,14 +94,16 @@ export default function AdminPage() {
     setLoading(true);
     setError(null);
     try {
-      const [u, a, f, h] = await Promise.all([
+      const [u, a, d, f, h] = await Promise.all([
         adminFetch<{ users: AdminUser[] }>("/admin/users", adminKey),
         adminFetch<{ activity: ActivityItem[] }>("/admin/activity", adminKey),
+        adminFetch<{ discussions: DiscussionItem[] }>("/admin/discussions", adminKey),
         adminFetch<{ failures: FailureItem[] }>("/admin/failures", adminKey),
         adminFetch<{ providers: ProviderHealth }>("/admin/health", adminKey),
       ]);
       setUsers(u.users);
       setActivity(a.activity);
+      setDiscussions(d.discussions);
       setFailures(f.failures);
       setProviders(h.providers);
       setAuthed(true);
@@ -104,14 +118,16 @@ export default function AdminPage() {
     if (!key) return;
     setError(null);
     try {
-      const [u, a, f, h] = await Promise.all([
+      const [u, a, d, f, h] = await Promise.all([
         adminFetch<{ users: AdminUser[] }>("/admin/users", key),
         adminFetch<{ activity: ActivityItem[] }>("/admin/activity", key),
+        adminFetch<{ discussions: DiscussionItem[] }>("/admin/discussions", key),
         adminFetch<{ failures: FailureItem[] }>("/admin/failures", key),
         adminFetch<{ providers: ProviderHealth }>("/admin/health", key),
       ]);
       setUsers(u.users);
       setActivity(a.activity);
+      setDiscussions(d.discussions);
       setFailures(f.failures);
       setProviders(h.providers);
     } catch (e: unknown) {
@@ -167,6 +183,7 @@ export default function AdminPage() {
   const TABS: { id: Tab; label: string }[] = [
     { id: "users",    label: `users (${users.length})` },
     { id: "activity", label: `activity (${activity.length})` },
+    { id: "discussions", label: `discussions (${discussions.length})` },
     { id: "failures", label: `failures (${failures.length})` },
     { id: "health",   label: "health" },
   ];
@@ -386,6 +403,44 @@ export default function AdminPage() {
                       <td className="py-2 pr-4 text-slate-400">{f.fallback_reason}</td>
                       <td className="py-2 pr-4 text-slate-500">{f.provider_used}</td>
                       <td className="max-w-xs truncate py-2 text-slate-300">{f.query}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+        )}
+
+        {/* ── Discussions tab ────────────────────────────────────────────────── */}
+        {tab === "discussions" && (
+          discussions.length === 0 ? (
+            <p className="text-xs text-slate-600">No moderated submissions yet.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-slate-800 text-left text-slate-500">
+                    <th className="pb-2 pr-4 font-normal">Time</th>
+                    <th className="pb-2 pr-4 font-normal">User</th>
+                    <th className="pb-2 pr-4 font-normal">Validation</th>
+                    <th className="pb-2 pr-4 font-normal">Action</th>
+                    <th className="pb-2 pr-4 font-normal">Comment</th>
+                    <th className="pb-2 font-normal">Query</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {discussions.map((d, i) => (
+                    <tr key={i} className="border-b border-slate-800/40">
+                      <td className="py-2 pr-4 text-slate-600">
+                        {new Date(d.created_at).toLocaleString()}
+                      </td>
+                      <td className="py-2 pr-4 text-slate-400">{d.user_email}</td>
+                      <td className="py-2 pr-4 text-slate-300">
+                        {d.validation} ({Math.round((d.confidence ?? 0) * 100)}%)
+                      </td>
+                      <td className="py-2 pr-4 text-slate-400">{d.action}</td>
+                      <td className="max-w-xs truncate py-2 pr-4 text-slate-300">{d.comment}</td>
+                      <td className="max-w-xs truncate py-2 text-slate-400">{d.query}</td>
                     </tr>
                   ))}
                 </tbody>

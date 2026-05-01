@@ -2,11 +2,11 @@
 
 import { AnimatePresence, motion } from "framer-motion";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { ReactNode, useMemo, useState } from "react";
 import ExecutionTracePanel, { ToolStep } from "@/components/llm-lab/ExecutionTracePanel";
 import LabCommandInput from "@/components/llm-lab/LabCommandInput";
 import LabTimeline from "@/components/llm-lab/LabTimeline";
-import { FlaskConical, Search, Sparkles, Workflow } from "lucide-react";
+import { BrainCircuit, FlaskConical, Search, ShieldCheck, Sparkles, Timer, Workflow } from "lucide-react";
 
 interface LabResult {
   answer: string;
@@ -155,6 +155,7 @@ export default function LLMLabPage() {
         )}
 
         <LabTimeline activeIndex={activeTimelineStep} />
+        <LabArchitecturePanel />
 
         {/* ── Error ─────────────────────────────────────────────────────── */}
         {error && (
@@ -242,6 +243,133 @@ export default function LLMLabPage() {
           </motion.div>
         )}
       </div>
+    </div>
+  );
+}
+
+function LabArchitecturePanel() {
+  return (
+    <section className="rounded-2xl border border-white/10 bg-[#101427] p-5">
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-violet-300/80">
+            LLM Lab Architecture
+          </p>
+          <h2 className="mt-1 text-lg font-semibold text-white">How this page works</h2>
+          <p className="mt-1 text-sm text-slate-400">
+            Actual flow for <code>/api/v1/llm-lab/query</code>: planner decides steps, tools execute, analysis synthesizes.
+          </p>
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-3">
+        <FlowCard
+          icon={<BrainCircuit className="h-4 w-4 text-amber-300" />}
+          title="1) Planner"
+          subtitle="LLM creates executable plan JSON"
+          bullets={[
+            "Allowed tools are strictly constrained",
+            "Plan always ends with analysis step",
+            "Unknown tools are rejected before execution",
+          ]}
+        />
+        <FlowCard
+          icon={<Search className="h-4 w-4 text-blue-300" />}
+          title="2) Tool Execution"
+          subtitle="PubMed retrieval + context build"
+          bullets={[
+            "PubMed fetch runs with timeout guards",
+            "Result cache reduces repeat latency",
+            "Step outputs validated before synthesis",
+          ]}
+        />
+        <FlowCard
+          icon={<Sparkles className="h-4 w-4 text-violet-300" />}
+          title="3) Analysis"
+          subtitle="Grounded synthesis from retrieved context"
+          bullets={[
+            "Claims must map to retrieved study context",
+            "Confidence band derived from retrieved evidence",
+            "Execution trace returned to UI for transparency",
+          ]}
+        />
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-2">
+        <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+          <p className="mb-2 flex items-center gap-2 text-sm font-medium text-slate-200">
+            <ShieldCheck className="h-4 w-4 text-emerald-300" />
+            Runtime Guards
+          </p>
+          <ul className="space-y-1 text-xs text-slate-400">
+            <li>• Per-IP rate limit on LLM Lab endpoint (20 req / 60s)</li>
+            <li>• Max tool-call cap per query to prevent runaway plans</li>
+            <li>• Fail-fast behavior on critical synthesis failures</li>
+          </ul>
+        </div>
+        <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+          <p className="mb-2 flex items-center gap-2 text-sm font-medium text-slate-200">
+            <Timer className="h-4 w-4 text-cyan-300" />
+            Execution Model
+          </p>
+          <ul className="space-y-1 text-xs text-slate-400">
+            <li>• Request enters FastAPI route and is rate-limited</li>
+            <li>• Agent executes plan step-by-step with timeout wrappers</li>
+            <li>• Response returns answer + step trace + tools used + duration</li>
+          </ul>
+        </div>
+      </div>
+
+      <div className="mt-4 rounded-xl border border-blue-400/20 bg-blue-500/10 p-4">
+        <p className="mb-2 flex items-center gap-2 text-sm font-semibold text-blue-100">
+          <Workflow className="h-4 w-4 text-blue-300" />
+          Tools & Agents used in this MCP
+        </p>
+        <div className="grid gap-3 md:grid-cols-2">
+          <div>
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-blue-200/90">Tools</p>
+            <ul className="space-y-1 text-xs text-blue-100/90">
+              <li>• <code>pubmed_search</code> — retrieves and structures PubMed studies</li>
+              <li>• <code>analysis</code> — synthesizes grounded answer from retrieved context</li>
+            </ul>
+          </div>
+          <div>
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-blue-200/90">Agent Chain</p>
+            <ul className="space-y-1 text-xs text-blue-100/90">
+              <li>• Route: <code>/api/v1/llm-lab/query</code></li>
+              <li>• Agent: <code>LabAgent</code> (plan → execute → synthesize)</li>
+              <li>• LLM: planner/analysis via fallback provider client</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function FlowCard({
+  icon,
+  title,
+  subtitle,
+  bullets,
+}: {
+  icon: ReactNode;
+  title: string;
+  subtitle: string;
+  bullets: string[];
+}) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+      <p className="flex items-center gap-2 text-sm font-medium text-slate-100">
+        {icon}
+        {title}
+      </p>
+      <p className="mt-1 text-xs text-slate-400">{subtitle}</p>
+      <ul className="mt-2 space-y-1 text-xs text-slate-400">
+        {bullets.map((b) => (
+          <li key={b}>• {b}</li>
+        ))}
+      </ul>
     </div>
   );
 }

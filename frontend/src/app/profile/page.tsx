@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { ReactNode, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { getUserHistory, deleteSavedAnswer, UserProfile, SavedAnswer } from "@/lib/api";
 import { signIn, useSession } from "next-auth/react";
-import { RotateCcw, Trash2, BookmarkCheck, Clock } from "lucide-react";
+import { RotateCcw, Trash2, BookmarkCheck, Clock, Sparkles, Activity, Search, SlidersHorizontal } from "lucide-react";
 
 const BAND_PILL: Record<string, string> = {
   HIGH: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300",
@@ -27,6 +27,12 @@ function formatSavedAt(iso: string): string {
   }
 }
 
+function getInitial(name?: string | null, email?: string | null) {
+  if (name?.trim()) return name.trim()[0].toUpperCase();
+  if (email?.trim()) return email.trim()[0].toUpperCase();
+  return "U";
+}
+
 export default function ProfilePage() {
   const { data: session, status } = useSession();
   const router = useRouter();
@@ -35,6 +41,8 @@ export default function ProfilePage() {
   const [error, setError] = useState<string | null>(null);
   const [deletingHash, setDeletingHash] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [savedSearch, setSavedSearch] = useState("");
+  const [bandFilter, setBandFilter] = useState<"ALL" | "HIGH" | "MEDIUM" | "LOW">("ALL");
 
   const load = async () => {
     if (!session?.user?.email) return;
@@ -85,8 +93,48 @@ export default function ProfilePage() {
     }
   };
 
+  const recentQueries = useMemo(
+    () => (profile?.query_history ?? []).slice().reverse().slice(0, 8),
+    [profile?.query_history]
+  );
+
+  const savedAnswers = useMemo(
+    () => (profile?.saved_answers ?? []).slice().reverse().slice(0, 12),
+    [profile?.saved_answers]
+  );
+
+  const avgConfidence = useMemo(() => {
+    const values = (profile?.saved_answers ?? [])
+      .map((s) => s.confidence)
+      .filter((v): v is number => typeof v === "number");
+    if (values.length === 0) return null;
+    return Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 100);
+  }, [profile?.saved_answers]);
+
+  const highConfidenceCount = useMemo(
+    () => (profile?.saved_answers ?? []).filter((s) => s.confidence_band === "HIGH").length,
+    [profile?.saved_answers]
+  );
+
+  const filteredSavedAnswers = useMemo(() => {
+    const q = savedSearch.trim().toLowerCase();
+    return savedAnswers.filter((item) => {
+      const matchesText =
+        q.length === 0 ||
+        item.query.toLowerCase().includes(q) ||
+        item.answer.toLowerCase().includes(q) ||
+        (item.mode ?? "").toLowerCase().includes(q);
+      const matchesBand = bandFilter === "ALL" || item.confidence_band === bandFilter;
+      return matchesText && matchesBand;
+    });
+  }, [savedAnswers, savedSearch, bandFilter]);
+
   if (status === "loading") {
-    return <main className="p-8 text-sm text-slate-600">Loading session...</main>;
+    return (
+      <main className="min-h-screen bg-slate-50 p-8 text-sm text-slate-600 dark:bg-slate-950 dark:text-slate-300">
+        Loading session...
+      </main>
+    );
   }
 
   if (!session?.user) {
@@ -112,20 +160,41 @@ export default function ProfilePage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 p-6 dark:bg-slate-950">
-      <div className="mx-auto max-w-4xl space-y-4">
-        <div className="rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-700 dark:bg-slate-900">
-          <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100">Profile</h1>
-          <p className="text-sm text-slate-600 dark:text-slate-400">{session.user.email}</p>
-          <p className="mt-2 text-xs text-slate-500 dark:text-slate-500">
+    <main className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 p-6 dark:from-slate-950 dark:to-slate-950">
+      <div className="mx-auto max-w-5xl space-y-5">
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="bg-gradient-to-r from-blue-600 to-indigo-600 px-6 py-5 text-white">
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-11 w-11 items-center justify-center rounded-full bg-white/20 text-base font-semibold">
+                  {getInitial(session.user?.name, session.user?.email)}
+                </div>
+                <div>
+                  <h1 className="text-xl font-semibold">Profile</h1>
+                  <p className="text-sm text-blue-100">{session.user.email}</p>
+                </div>
+              </div>
+              <Link
+                href="/"
+                className="rounded-lg border border-white/40 bg-white/10 px-3 py-1.5 text-xs font-medium text-white hover:bg-white/20"
+              >
+                Back to MedTruth
+              </Link>
+            </div>
+          </div>
+          <div className="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
             Most searched condition:{" "}
             <span className="font-semibold text-emerald-700 dark:text-emerald-400">
               {profile?.most_searched_condition ?? "No trend yet"}
             </span>
-          </p>
-        </div>
+          </div>
+        </section>
 
-        {loading && <div className="text-sm text-slate-600">Loading your data...</div>}
+        {loading && (
+          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+            Loading your data...
+          </div>
+        )}
         {error && <div className="text-sm text-red-600">Error: {error}</div>}
         {deleteError && (
           <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300">
@@ -134,62 +203,108 @@ export default function ProfilePage() {
         )}
 
         {!loading && !error && profile && (
-          <div className="grid gap-4 md:grid-cols-2">
-            <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
-              <h2 className="mb-2 font-medium text-slate-800 dark:text-slate-200">Usage</h2>
-              <p className="text-sm text-slate-700 dark:text-slate-300">
-                Queries executed: {profile.usage_count}
-              </p>
-              <p className="text-sm text-slate-700 dark:text-slate-300">
-                Saved answers: {profile.saved_answers.length}
-              </p>
+          <div className="grid gap-4">
+            <section className="grid gap-4 md:grid-cols-3">
+              <StatCard
+                icon={<Activity className="h-4 w-4 text-blue-500" />}
+                label="Queries Executed"
+                value={profile.usage_count}
+              />
+              <StatCard
+                icon={<BookmarkCheck className="h-4 w-4 text-indigo-500" />}
+                label="Saved Answers"
+                value={profile.saved_answers.length}
+              />
+              <StatCard
+                icon={<Sparkles className="h-4 w-4 text-emerald-500" />}
+                label="Most Searched"
+                value={profile.most_searched_condition ?? "No trend"}
+              />
             </section>
 
-            <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
-              <h2 className="mb-2 font-medium text-slate-800 dark:text-slate-200">Recent Queries</h2>
-              {profile.query_history.length === 0 ? (
+            <section className="grid gap-4 md:grid-cols-2">
+              <StatCard
+                icon={<Sparkles className="h-4 w-4 text-violet-500" />}
+                label="Avg Confidence"
+                value={avgConfidence != null ? `${avgConfidence}%` : "—"}
+              />
+              <StatCard
+                icon={<BookmarkCheck className="h-4 w-4 text-emerald-500" />}
+                label="High Confidence Saves"
+                value={highConfidenceCount}
+              />
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+              <h2 className="mb-3 flex items-center gap-2 font-medium text-slate-800 dark:text-slate-200">
+                <Search className="h-4 w-4 text-blue-500" />
+                Recent Queries
+              </h2>
+              {recentQueries.length === 0 ? (
                 <p className="text-sm text-slate-500">No queries yet.</p>
               ) : (
-                <ul className="space-y-1 text-sm text-slate-700 dark:text-slate-300">
-                  {profile.query_history.slice(0, 8).map((q, i) => (
-                    <li key={i} className="flex items-start gap-1.5">
-                      <span className="text-slate-400">•</span>
-                      <button
-                        onClick={() => handleReRun(q)}
-                        className="text-left text-blue-600 hover:underline dark:text-blue-400"
-                      >
-                        {q}
-                      </button>
-                    </li>
+                <div className="flex flex-wrap gap-2">
+                  {recentQueries.map((q, i) => (
+                    <button
+                      key={`${q}-${i}`}
+                      onClick={() => handleReRun(q)}
+                      className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-700 transition hover:border-blue-300 hover:text-blue-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-blue-600 dark:hover:text-blue-300"
+                    >
+                      {q}
+                    </button>
                   ))}
-                </ul>
+                </div>
               )}
             </section>
 
-            <section className="rounded-xl border border-slate-200 bg-white p-4 md:col-span-2 dark:border-slate-700 dark:bg-slate-900">
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
               <h2 className="mb-3 flex items-center gap-2 font-medium text-slate-800 dark:text-slate-200">
                 <BookmarkCheck className="h-4 w-4 text-blue-500" />
                 Saved Answers
               </h2>
-              {profile.saved_answers.length === 0 ? (
+              <div className="mb-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                  <input
+                    value={savedSearch}
+                    onChange={(e) => setSavedSearch(e.target.value)}
+                    placeholder="Search saved answers..."
+                    className="w-full rounded-xl border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm text-slate-700 outline-none transition focus:border-blue-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:focus:border-blue-700"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <SlidersHorizontal className="h-4 w-4 text-slate-400" />
+                  <select
+                    value={bandFilter}
+                    onChange={(e) => setBandFilter(e.target.value as "ALL" | "HIGH" | "MEDIUM" | "LOW")}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 outline-none transition focus:border-blue-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:focus:border-blue-700"
+                  >
+                    <option value="ALL">All bands</option>
+                    <option value="HIGH">High only</option>
+                    <option value="MEDIUM">Medium only</option>
+                    <option value="LOW">Low only</option>
+                  </select>
+                </div>
+              </div>
+              {savedAnswers.length === 0 ? (
                 <p className="text-sm text-slate-500">
                   No saved answers yet. Save one from the main query screen.
                 </p>
+              ) : filteredSavedAnswers.length === 0 ? (
+                <p className="text-sm text-slate-500">
+                  No saved answers match your current filters.
+                </p>
               ) : (
                 <div className="space-y-3">
-                  {profile.saved_answers
-                    .slice()
-                    .reverse()
-                    .slice(0, 10)
-                    .map((item, idx) => (
-                      <SavedAnswerCard
-                        key={`${item.answer_hash ?? idx}`}
-                        item={item}
-                        onReRun={handleReRun}
-                        onDelete={handleDelete}
-                        isDeleting={deletingHash === item.answer_hash}
-                      />
-                    ))}
+                  {filteredSavedAnswers.map((item, idx) => (
+                    <SavedAnswerCard
+                      key={`${item.answer_hash ?? idx}`}
+                      item={item}
+                      onReRun={handleReRun}
+                      onDelete={handleDelete}
+                      isDeleting={deletingHash === item.answer_hash}
+                    />
+                  ))}
                 </div>
               )}
             </section>
@@ -197,6 +312,23 @@ export default function ProfilePage() {
         )}
       </div>
     </main>
+  );
+}
+
+function StatCard({
+  icon,
+  label,
+  value,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string | number;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+      <div className="mb-2 flex items-center gap-2">{icon}<p className="text-xs uppercase tracking-wide text-slate-500">{label}</p></div>
+      <p className="text-xl font-semibold text-slate-900 dark:text-slate-100">{value}</p>
+    </div>
   );
 }
 
@@ -215,7 +347,7 @@ function SavedAnswerCard({
   const confidence = item.confidence != null ? Math.round(item.confidence * 100) : null;
 
   return (
-    <article className="rounded-xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/60">
+    <article className="rounded-xl border border-slate-200 bg-slate-50 p-4 transition hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800/60 dark:hover:border-slate-600">
       {/* Header row */}
       <div className="flex items-start justify-between gap-3">
         <button
@@ -272,7 +404,7 @@ function SavedAnswerCard({
 
       {/* Expandable answer preview */}
       {expanded && (
-        <p className="mt-3 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
+        <p className="mt-3 rounded-lg bg-white px-3 py-2 text-xs leading-relaxed text-slate-600 dark:bg-slate-900/40 dark:text-slate-400">
           {item.answer.slice(0, 600)}
           {item.answer.length > 600 && "…"}
         </p>

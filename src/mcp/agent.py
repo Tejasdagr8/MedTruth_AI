@@ -45,6 +45,7 @@ _CONFIDENCE_NOTE = (
     "retrieved from PubMed. It has not been validated against full clinical evidence and "
     "may not reflect current medical consensus. Do not use for clinical decisions.*"
 )
+_STUDY_REF_RE = re.compile(r"\[Study\s+\d+\]", re.IGNORECASE)
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
 
@@ -239,6 +240,47 @@ def _is_analysis_failed(output: str) -> bool:
         or output.startswith("Analysis step failed")
     )
 
+
+def _enforce_claim_grounding(answer: str) -> tuple[str, int]:
+    """
+    Post-process analysis text and flag likely claims lacking explicit [Study N] anchors.
+    Returns (patched_answer, ungrounded_claim_count).
+    """
+    lines = answer.splitlines()
+    patched: list[str] = []
+    ungrounded = 0
+
+    for line in lines:
+        stripped = line.strip()
+        lower = stripped.lower()
+        is_claim_line = (
+            stripped.startswith(("-", "*", "•"))
+            or re.match(r"^\d+[.)]\s+", stripped) is not None
+            or "key finding" in lower
+        )
+        has_ref = _STUDY_REF_RE.search(stripped) is not None
+
+        if is_claim_line and stripped and not has_ref:
+            ungrounded += 1
+            patched.append(f"{line} [UNSUPPORTED]")
+        else:
+            patched.append(line)
+
+    if ungrounded == 0:
+        return answer, 0
+
+    warning = (
+        "\n\nGrounding check:\n"
+        f"- {ungrounded} claim(s) lacked explicit [Study N] anchors and were marked [UNSUPPORTED]."
+    )
+    return "\n".join(patched) + warning, ungrounded
+
+
+def _downgrade_confidence(band: str) -> str:
+    if band == "HIGH":
+        return "MEDIUM"
+    return "LOW"
+
 # ── Agent ─────────────────────────────────────────────────────────────────────
 
 class LabAgent:
@@ -398,9 +440,14 @@ class LabAgent:
                     overall_error = result.error or "Analysis step produced no usable output"
                     answer = "Unable to complete analysis due to a tool failure. Please try again."
                     break
-                answer = result.output
+                grounded_answer, ungrounded = _enforce_claim_grounding(result.output)
+                answer = grounded_answer
+                result.output = grounded_answer
                 if result.status == "failed":
                     overall_status = "partial"
+                if ungrounded > 0:
+                    overall_status = "partial"
+                    logger.warning("[MCP] Grounding check flagged %d ungrounded claim(s)", ungrounded)
 
         # ── Confidence note + band ──────────────────────────────────────────
         if not answer and overall_status != "failed":
@@ -411,6 +458,11 @@ class LabAgent:
 
         # ✓ #6 — compute confidence band from evidence steps
         confidence, confidence_reason = _compute_confidence(steps)
+        if "[UNSUPPORTED]" in answer:
+            confidence = _downgrade_confidence(confidence)
+            confidence_reason = (
+                f"{confidence_reason}; downgraded due to unsupported claims in synthesis"
+            )
 
         tools_used = list(dict.fromkeys(s.tool for s in steps))
         total_ms = (time.perf_counter() - total_start) * 1_000

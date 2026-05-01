@@ -3,25 +3,40 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertTriangle, ArrowRight, CheckCircle, HelpCircle, Send, XCircle } from "lucide-react";
 import { useState } from "react";
-import { validateComment, type CommentValidation } from "@/lib/api";
+import {
+  submitDiscussion,
+  type CommentValidation,
+  type DiscussionSubmission,
+} from "@/lib/api";
 
 interface ControlledDiscussionProps {
+  query: string;
   answer: string;
   evidenceTitles: string[];
   anchorSentence?: string;
+  userEmail?: string;
+  answerId?: string;
   onQuerySuggestion?: (query: string) => void;
 }
 
 type CommentState =
   | { phase: "idle" }
   | { phase: "validating" }
-  | { phase: "result"; validation: CommentValidation; comment: string }
+  | {
+      phase: "result";
+      validation: CommentValidation;
+      comment: string;
+      submission: DiscussionSubmission;
+    }
   | { phase: "error"; message: string };
 
 export default function ControlledDiscussion({
+  query,
   answer,
   evidenceTitles,
   anchorSentence,
+  userEmail,
+  answerId,
   onQuerySuggestion,
 }: ControlledDiscussionProps) {
   const [open, setOpen]       = useState(false);
@@ -31,17 +46,28 @@ export default function ControlledDiscussion({
   const handleSubmit = async () => {
     const text = comment.trim();
     if (!text || text.length < 5) return;
+    if (!userEmail) {
+      setState({ phase: "error", message: "Sign in to submit notes for moderation." });
+      return;
+    }
     setState({ phase: "validating" });
     try {
-      const result = await validateComment({
+      const result = await submitDiscussion(userEmail, {
+        query,
+        answer_id: answerId ?? null,
         comment: text,
         answer,
         evidence_titles: evidenceTitles,
         anchor_sentence: anchorSentence ?? null,
       });
-      setState({ phase: "result", validation: result, comment: text });
+      setState({
+        phase: "result",
+        validation: result.validation,
+        comment: text,
+        submission: result.submission,
+      });
     } catch {
-      setState({ phase: "error", message: "Moderation service unavailable. Try again later." });
+      setState({ phase: "error", message: "Submission failed. Try again later." });
     }
   };
 
@@ -106,7 +132,7 @@ export default function ControlledDiscussion({
                   </span>
                   <button
                     onClick={handleSubmit}
-                    disabled={comment.trim().length < 5}
+                    disabled={comment.trim().length < 5 || !userEmail}
                     className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-300 dark:hover:bg-slate-800"
                   >
                     <Send className="h-3 w-3" />
@@ -145,6 +171,14 @@ function ModerationResult({
   onReset: () => void;
 }) {
   const { validation } = state;
+  const statusLabel =
+    validation.action === "approved"
+      ? "approved"
+      : validation.action === "held_for_review"
+        ? "in review"
+        : validation.action === "blocked"
+          ? "blocked"
+          : "converted";
 
   return (
     <motion.div
@@ -170,6 +204,18 @@ function ModerationResult({
           </div>
         </div>
       )}
+
+      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-500 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-400">
+        <p>
+          Submission status:{" "}
+          <span className="font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">
+            {statusLabel}
+          </span>
+        </p>
+        <p>
+          Submitted at: {new Date(state.submission.created_at).toLocaleString()}
+        </p>
+      </div>
 
       {/* ── QUESTION → offer to search ────────────────────────────────────── */}
       {validation.type === "QUESTION" && (

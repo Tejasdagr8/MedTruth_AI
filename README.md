@@ -733,7 +733,8 @@ cp .env.example .env
 # Open .env and set ANTHROPIC_API_KEY=sk-ant-...
 
 # 5. Start the backend
-uvicorn api.main:app --reload --port 8000
+source /Users/tejasmelkote/MedTruth_AI/.venv/bin/activate
+python -m uvicorn api.main:app --reload --port 8000
 
 # 6. In a new terminal, set up and start the frontend
 cd frontend

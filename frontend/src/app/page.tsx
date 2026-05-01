@@ -18,6 +18,7 @@ import {
   syncUser,
 } from "@/lib/api";
 import { AnimatePresence, motion } from "framer-motion";
+import Link from "next/link";
 import { signIn, useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -305,6 +306,12 @@ export default function Home() {
               <p className="text-xs text-slate-500 dark:text-slate-400">ASK → THINKING → ANSWER → TRUST → EXPLORE</p>
             </div>
             <div className="flex items-center gap-2">
+              <Link
+                href="/admin"
+                className="rounded-xl border border-slate-300 px-3 py-1.5 text-xs text-slate-700 dark:border-slate-600 dark:text-slate-200"
+              >
+                Admin
+              </Link>
               <button
                 onClick={toggleTheme}
                 className="rounded-xl border border-slate-300 px-3 py-1.5 text-xs text-slate-700 dark:border-slate-600 dark:text-slate-200"
@@ -464,6 +471,7 @@ export default function Home() {
                         <AnswerResponseCard
                           query={turn.query}
                           result={turn.result}
+                          currentUserEmail={session?.user?.email ?? undefined}
                           onSentenceHover={setHighlightedSourceIndex}
                           onSentenceClick={jumpToSource}
                           onSave={() => handleSaveTurn(turn)}

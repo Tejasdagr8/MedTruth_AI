@@ -29,7 +29,9 @@ class UserStore:
         self._mongo_uri = mongo_uri
         self._db_name = db_name
         self._memory: dict[str, dict[str, Any]] = {}
+        self._memory_discussions: list[dict[str, Any]] = []
         self._users: Collection | None = None
+        self._discussions: Collection | None = None
         self._persistent_available = False
         self._last_connect_attempt: float = 0.0
         self._connect()
@@ -43,11 +45,15 @@ class UserStore:
             self._client.admin.command("ping")
             self._users = self._db["users"]
             self._users.create_index("email", unique=True)
+            self._discussions = self._db["discussions"]
+            self._discussions.create_index("created_at")
+            self._discussions.create_index("user_email")
             self._persistent_available = True
             logger.info("Mongo connected for user store")
         except PyMongoError:
             logger.exception("Mongo connection failed; falling back to in-memory user store")
             self._users = None
+            self._discussions = None
             self._persistent_available = False
 
     def _should_retry_connect(self) -> bool:
@@ -69,6 +75,13 @@ class UserStore:
         if self._should_retry_connect():
             self._connect()
         return self._users
+
+    def _ensure_discussions_collection(self) -> Collection | None:
+        if self._discussions is not None and self._persistent_available:
+            return self._discussions
+        if self._should_retry_connect():
+            self._connect()
+        return self._discussions
 
     @staticmethod
     def _now() -> str:
@@ -324,6 +337,36 @@ class UserStore:
             for q in reversed((doc.get("query_history") or [])[-5:]):
                 items.append({"email": doc.get("email", ""), "query": q})
         return items[:limit]
+
+    def save_discussion(self, entry: dict[str, Any]) -> dict[str, Any]:
+        """Persist moderated discussion submission and return stored payload."""
+        doc = {**entry, "created_at": self._now()}
+        discussions = self._ensure_discussions_collection()
+        if discussions is None:
+            self._memory_discussions = [doc, *self._memory_discussions][:500]
+            return doc
+        try:
+            result = discussions.insert_one(doc)
+            return {**doc, "id": str(result.inserted_id)}
+        except PyMongoError:
+            logger.exception("Failed to save discussion for %s", entry.get("user_email", "unknown"))
+            raise
+
+    def list_discussions(self, limit: int = 100) -> list[dict[str, Any]]:
+        """Return latest moderated discussion submissions for admin panel."""
+        discussions = self._ensure_discussions_collection()
+        if discussions is None:
+            return self._memory_discussions[:limit]
+        try:
+            docs = list(
+                discussions.find({}, {"_id": 0})
+                .sort("created_at", -1)
+                .limit(limit)
+            )
+            return docs
+        except PyMongoError:
+            logger.exception("Failed to list discussions")
+            return []
 
     def get_user(self, email: str) -> dict[str, Any]:
         users = self._ensure_users_collection()
