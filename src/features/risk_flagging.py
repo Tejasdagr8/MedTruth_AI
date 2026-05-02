@@ -1,7 +1,18 @@
 """
-Risk flagging system.
-Detects high-stakes query categories and appends appropriate safety disclaimers.
-Categories: drug interaction, dosage, surgical, pediatric, pregnancy, oncology, emergency.
+Risk flagging — pattern matching for high-stakes query categories.
+
+This is intentionally conservative. I'd rather show a disclaimer that turns out to
+be unnecessary than miss a query about pediatric dosing or a drug contraindication.
+The cost of a false positive is a banner the user can ignore. The cost of a false
+negative in a clinical context is much worse.
+
+Known false-positive source: "stroke" triggers ACUTE_CARE even for non-emergency
+questions about stroke recovery / rehabilitation. The mental_health guard for acute_care
+is a similar hack. Both are acceptable tradeoffs for now.
+
+TODO: replace the string-matching approach with a lightweight classifier at some point.
+The regex approach starts failing badly on complex queries with negations
+("no history of emergency intervention") but those are uncommon enough that it's fine for v1.
 """
 
 import re
@@ -158,6 +169,9 @@ def _matches_any(text: str, patterns: list[str]) -> bool:
 
 
 def is_mental_health(query: str) -> bool:
+    # Guard against acute_care patterns firing on mental health queries.
+    # "suicidal ideation" would otherwise match the emergency pattern,
+    # but the appropriate response there is very different from "call 911".
     q = query.lower()
     return any(k in q for k in ["depression", "cbt", "therapy", "psychotherapy", "anxiety", "mental"])
 

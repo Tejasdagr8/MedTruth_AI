@@ -1,20 +1,22 @@
 """
-LLM Lab agent — hardened MCP-style tool orchestration.
+LLM Lab agent — lightweight tool-calling loop, separate from the main RAG pipeline.
 
-Hardening applied:
-  ✓ #1 — Explicit ALLOWED_TOOLS + required-field schema validation; unknown/malformed tools skipped
-  ✓ #2 — Step output validation with fail-fast on critical (analysis) failure
-  ✓ #3 — Structured [MCP] server logs per step; status/error/confidence in AgentResponse
-  ✓ #4 — Validated plan exposed as top-level field before execution results
-  ✓ #5 — PubMed result cache (5-min TTL) delegated to tools.py
-  ✓ #6 — Confidence band (LOW/MEDIUM/HIGH) derived from retrieved evidence quality
-  ✓ #7 — Analysis prompt enforces claim-level grounding; hallucination guardrail
-  ✓ Context capped at MAX_CONTEXT_CHARS; per-abstract truncation in tools.py
-  ✓ asyncio.wait_for timeouts on both PubMed and LLM calls
-  ✓ MAX_TOOL_CALLS_PER_QUERY cap enforced during plan validation
+This is the "experimental" path. It doesn't run MEDEVA scoring, doesn't do source
+validation, and doesn't use BioBERT embeddings. It's basically: plan → PubMed search
+→ LLM synthesis, with safety rails bolted on after I saw what happened without them.
 
-Isolation still intact:
-  ✗ No MedTruthPipeline / RAGChain / MEDEVA scoring
+Isolation from the main pipeline is intentional — the Lab is for exploring how
+LLM tool-calling behaves in a medical context, not for production answers.
+
+The hardening checklist below came from a code review pass after noticing the planner
+was occasionally emitting steps with empty inputs, duplicate analysis calls, and
+tools that don't exist. The fixes aren't clever, they're just defensive.
+
+What's deliberately missing compared to the main pipeline:
+  - No MEDEVA scoring (would need structured doc format)
+  - No source validation gate (PubMed is trusted by default here)
+  - No contradiction detection
+  - No NLI entailment check
 """
 
 import asyncio

@@ -1,7 +1,21 @@
 """
 Source validation gate.
-Hard-rejects any document not originating from the trusted source whitelist.
-Validates via DOI prefix, ISSN, journal name, and source tag.
+
+The point here is simple: I don't want the system to silently answer from WebMD or
+a retracted paper someone uploaded to ResearchGate. Every document must clear at least
+one signal before it reaches the ranker.
+
+The signal priority is:
+  1. Blocked domain → hard reject, no further checks
+  2. ISSN match → most reliable for journals with known ISSNs
+  3. PMID → confirms MEDLINE indexing, which has its own quality bar
+  4. DOI prefix → publisher-level trust (not perfect — Elsevier hosts both Lancet and junk)
+  5. Journal name regex → fallback, prone to false positives but catches edge cases
+  6. Source tag → weakest, basically just "came from PubMed API"
+
+Note on DOI prefix splitting: DOIs look like 10.XXXX/suffix, so the publisher prefix is
+everything before the first "/". I originally split on "." which gave "10" and "XXXX/suffix"
+— caught this during testing when nothing matched. Now splits on "/" like it should.
 """
 
 import re
@@ -73,14 +87,15 @@ TRUSTED_SOURCES = {"pubmed", "europepmc", "cochrane", "who", "cdc"}
 
 TRUSTED_DOI_PREFIXES = {
     "10.1136",   # BMJ
-    "10.1016",   # Lancet (Elsevier)
+    "10.1016",   # Lancet (Elsevier — yes, Elsevier publishes a lot of things, but Lancet specifically)
     "10.1038",   # Nature
-    "10.1002",   # Cochrane (Wiley)
+    "10.1002",   # Cochrane / Wiley
     "10.1001",   # JAMA / AMA
     "10.7326",   # Annals of Internal Medicine
     "10.1371",   # PLoS Medicine
     "10.2471",   # WHO Bulletin
-    "10.1161",   # AHA (all Circulation family + Stroke + Hypertension)
+    "10.1161",   # AHA (Circulation family, Stroke, Hypertension)
+    # TODO: consider adding 10.1056 (NEJM) — currently caught by journal name regex
 }
 
 BLOCKED_DOMAIN_PATTERNS = [
@@ -141,7 +156,9 @@ def _check_source_tag(source: str) -> Optional[ValidationResult]:
 
 
 def _check_pmid(pmid: Optional[str]) -> Optional[ValidationResult]:
-    """A valid PMID guarantees the article is indexed in MEDLINE/PubMed."""
+    # PMID is the strongest signal after ISSN — MEDLINE has its own indexing criteria
+    # and won't include pure grey literature or blog posts. The regex just validates
+    # format; we're not hitting the NCBI API to verify existence.
     if pmid and re.match(r"^\d{1,10}$", str(pmid).strip()):
         return ValidationResult(
             status=ValidationStatus.TRUSTED,

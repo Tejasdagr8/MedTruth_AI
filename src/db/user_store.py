@@ -1,5 +1,18 @@
 """
-Mongo-backed user profile store for query history and saved answers.
+User data store — MongoDB with in-memory fallback.
+
+The in-memory fallback exists because: (a) Render free tier restarts frequently,
+(b) I wanted the API to stay up during Mongo outages without throwing 500s.
+The tradeoff is that data doesn't survive process restarts when Mongo is down —
+that's acceptable for the use case (research tool, not banking).
+
+The reconnect rate-limiting (_CONNECT_RETRY_TTL) matters more than it sounds.
+Without it, every request under Mongo outage pays a 1.5s serverSelectionTimeoutMS
+penalty, which tanks the API completely.
+
+Saved answers are keyed by SHA256(answer) so re-saving the same answer is idempotent.
+The hash is computed on the full answer text, not the query, so the same query can
+produce different saved answers if the evidence changes (different top-K, new papers).
 """
 
 import os
@@ -316,6 +329,9 @@ class UserStore:
         ]
 
     def get_recent_activity(self, limit: int = 20) -> list[dict[str, Any]]:
+        # TODO: add timestamps to query_history entries so this can be sorted by actual time.
+        # Right now we just take the last N queries per user and flatten — the ordering
+        # is "recent per user" not "globally recent", which is fine for the admin panel.
         """Return the most recent queries across all users (no timestamps — best-effort)."""
         users = self._ensure_users_collection()
         if users is None:

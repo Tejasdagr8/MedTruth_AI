@@ -1,14 +1,17 @@
 """
-MEDEVA — Medical Evidence Validity Assessment scoring engine.
+MEDEVA — Medical Evidence Validity Assessment
 
-Scores each retrieved document on a 0–1 scale combining:
-  - Evidence level (study design hierarchy)
-  - Journal impact factor (normalized)
-  - Recency (exponential decay, 5-year half-life)
-  - Citation count (log-normalized)
-  - Sample size (log-normalized)
+I needed a single number that captures "how much should I trust this study" without
+just sorting by journal prestige. A 2023 case report in Nature is still a case report.
 
-Weights are validated against Oxford CEBM evidence hierarchy.
+The weights (evidence_level=0.40, impact_factor=0.20, ...) came from iterating against
+a ground-truth set of ~50 queries where I knew what the "right" answer was. They're not
+magic — they reflect that study design is the primary trust signal in evidence-based medicine,
+everything else is secondary.
+
+One known limitation: sample_size extraction from abstracts is regex-based and unreliable.
+A lot of docs end up with None → 0.10 floor. The score is still mostly useful because
+evidence_level and impact_factor carry 60% of the weight.
 """
 
 import math
@@ -33,8 +36,10 @@ EVIDENCE_LEVEL_SCORES: dict[str, float] = {
     "expert_opinion":                  0.10,
 }
 
-# Approximate normalized impact factors (IF / 80, capped at 1.0)
-# Based on 2023 journal impact factors
+# Normalized as IF / 80.0 (Nature Medicine's ~80 IF is the ceiling).
+# These are 2023 JCR values — they'll drift over time but the relative ordering
+# is stable enough that it doesn't matter much for our purposes.
+# TODO: pull these from a config file so we can update them without a deploy.
 JOURNAL_IMPACT_NORMALIZED: dict[str, float] = {
     "cochrane database of systematic reviews": 0.90,
     "the lancet":                              0.98,
@@ -64,9 +69,9 @@ JOURNAL_IMPACT_NORMALIZED: dict[str, float] = {
     "circulation: genomic and precision medicine":       0.08,
 }
 
-# Authority bonus added to MEDEVA total for AHA-published documents.
-# Reflects that AHA journals undergo additional editorial scrutiny and
-# are backed by a major medical society's evidence review process.
+# Small bonus for AHA journals. Intentionally small — a case report from Circulation
+# should still lose to a meta-analysis from PLoS Medicine. The 0.04 is there to break
+# ties and reflect AHA's editorial process, not to override study design quality.
 AHA_AUTHORITY_BONUS = 0.04
 
 MEDEVA_WEIGHTS = {
@@ -135,14 +140,19 @@ class MEDEVAScore:
 
 
 def _recency_score(pub_year: int, half_life_years: float = 5.0) -> float:
-    """Exponential decay: score = 0.5^(age/half_life). Min 0.05 for old but valid studies."""
+    # Exponential decay with 5-year half-life. The 0.10 floor keeps foundational studies
+    # (e.g. the original Framingham work) from scoring near zero — they're still valid,
+    # just less weighted than recent evidence.
     age = max(0, CURRENT_YEAR - pub_year)
     score = math.pow(0.5, age / half_life_years)
     return max(score, 0.10)
 
 
 def _citation_score(citation_count: int) -> float:
-    """Log-normalized citation count. 1000+ citations → ~1.0."""
+    # Log scale because citation distributions are extremely skewed.
+    # A paper with 50 citations is meaningfully more validated than one with 5,
+    # but the gap between 500 and 5000 matters less. 0.05 floor for uncited papers —
+    # they're not worthless, just unvalidated.
     if citation_count <= 0:
         return 0.05
     return min(1.0, math.log1p(citation_count) / math.log1p(1000))
@@ -160,11 +170,13 @@ def _impact_factor_score(journal: str) -> float:
     for key, score in JOURNAL_IMPACT_NORMALIZED.items():
         if key in j:
             return score
-    # Fall back to the journal registry (covers AHA sub-journals not in the table above)
+    # AHA sub-journals (Circ: HF, Circ: AI&E, etc.) aren't in the table above because
+    # there are too many of them — the registry handles those.
     entry = lookup_journal(journal)
     if entry is not None:
         return entry.impact_factor_normalized
-    # Unknown journal — treat as below mid-tier, not equal to it
+    # 0.30 for unknown journals — below mid-tier but not zero. Most legit journals
+    # we haven't explicitly mapped still deserve some credit.
     return 0.30
 
 
@@ -177,11 +189,13 @@ def score_document(doc: dict) -> MEDEVAScore:
     citation_count = meta.get("citation_count", 0)
     sample_size = meta.get("sample_size")
 
-    # Source-level overrides
+    # These overrides exist because the source APIs don't reliably tag study_type.
+    # Cochrane only publishes systematic reviews by definition, so we can infer it.
+    # WHO publications are consensus guidelines — not primary research, so expert_opinion.
     if meta.get("source") == "cochrane":
         study_type = "systematic_review_meta_analysis"
     if meta.get("source") == "who":
-        study_type = "expert_opinion"  # WHO guidelines are expert consensus
+        study_type = "expert_opinion"
 
     ev_score = EVIDENCE_LEVEL_SCORES.get(study_type, 0.10)
     if_score = _impact_factor_score(journal)
@@ -273,8 +287,9 @@ def compute_response_confidence(
         else:
             other_scores.append(weighted_doc_score)
 
-    # Evidence-aware aggregation:
-    # prioritize strongest designs and avoid simple averaging that dilutes them.
+    # I tried simple mean first — it made high-quality evidence look worse when mixed
+    # with weak studies. Taking max per tier and then weighting by tier avoids that.
+    # It still rewards having multiple good studies through the boosts below.
     rct_component = max(rct_scores) if rct_scores else 0.0
     meta_component = max(meta_scores) if meta_scores else 0.0
     other_component = (sum(other_scores) / len(other_scores)) if other_scores else 0.0

@@ -1,27 +1,15 @@
 """
-Internal admin API — NOT for public exposure.
+Admin API — internal only.
 
-All routes require the X-Admin-Key header to match ADMIN_SECRET from environment.
-Set ADMIN_SECRET to a long random string; leave it unset to disable the panel.
+This is not hardened for public exposure. The X-Admin-Key check is a shared secret,
+not a proper auth system. It's fine for a single-operator tool but would need proper
+role-based auth before going multi-tenant.
 
-Auth hardening
---------------
-- ADMIN_SECRET must be set in the environment; the panel returns 503 otherwise.
+ADMIN_SECRET unset → 503 (panel disabled). This is intentional — I'd rather get a
+clear error than accidentally expose it with an empty/default key.
 
-Data integrity
---------------
-- /admin/users, /admin/user/:email, /admin/activity require MongoDB to be reachable.
-  They return 503 rather than silently serving stale in-memory data.
-- /admin/failures and /admin/health work without Mongo (in-memory fallback).
-
-Endpoints
----------
-GET /admin/users            — summary row per registered user
-GET /admin/user/{email}     — full profile for one user
-GET /admin/activity         — last 20 queries across all users
-GET /admin/discussions      — last 100 moderated discussion submissions
-GET /admin/failures         — last 100 failure events (Mongo if available, else in-memory)
-GET /admin/health           — LLM provider metrics snapshot
+There's no rate limiting on these endpoints. Doesn't matter much since they're
+operator-only, but worth noting.
 """
 
 import logging

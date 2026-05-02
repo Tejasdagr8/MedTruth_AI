@@ -1,7 +1,20 @@
 """
-RAG generation chain using Anthropic Claude.
-Enforces strict citation grounding — model is instructed to answer ONLY
-from provided context and mark every claim with [n] citation markers.
+RAG generation chain.
+
+The main constraint I'm working around: Claude is really good at generating
+plausible-sounding medical text from its training data, which is exactly what
+I don't want here. The system prompt goes out of its way to block that.
+
+The INSUFFICIENT_EVIDENCE self-rejection mechanism came from observing that the model
+sometimes retrieves relevant-sounding docs that don't actually answer the question.
+MEDEVA confidence catches the worst cases, but the model itself can detect when the
+context is just tangentially related — so we let it flag that and bail out cleanly.
+
+Failure modes in order of how often they occur:
+  1. Provider timeout / rate limit → evidence_only mode (extractive fallback)
+  2. Model flags INSUFFICIENT_EVIDENCE → clean rejection
+  3. MEDEVA confidence below threshold → rejection before LLM call
+  4. Empty retrieval → rejection before ranking
 """
 
 import os
@@ -18,8 +31,14 @@ from src.ranking.medeva_scorer import (
 )
 
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
-MAX_CONTEXT_TOKENS = 6000  # conservative limit for context window
+# 6000 tokens of context is conservative — Sonnet handles more but this keeps
+# latency predictable. The top-K selection in the pipeline already prioritizes
+# the highest-MEDEVA docs, so we're not losing much by truncating here.
+MAX_CONTEXT_TOKENS = 6000
 
+# The system prompt is intentionally repetitive ("ONLY", "MUST", "NEVER", "STRICTLY").
+# Early versions were more relaxed and Claude would occasionally supplement with training
+# data — correct-sounding but uncited. The redundancy is load-bearing.
 SYSTEM_PROMPT = """You are MedTruth AI, a medical evidence assistant. Your ONLY job is to answer questions strictly based on the provided research context.
 
 STRICT RULES:
@@ -193,6 +212,8 @@ class MedTruthRAGChain:
                     break
 
         if not key_findings:
+            # TODO: improve this fallback — the generic message isn't very useful.
+            # Ideally we'd extract conclusion sentences from abstracts more reliably.
             key_findings.append(
                 "Available studies suggest potential clinical benefit, but the retrieved evidence is limited and should be interpreted cautiously."
             )
