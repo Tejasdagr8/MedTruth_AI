@@ -14,7 +14,8 @@ Suggested service names:
 
 1. In Render, create **Web Service** from this GitHub repo.
 2. Render detects `render.yaml` automatically.
-3. Set required env vars in Render dashboard:
+3. **Python version:** New Render services default to Python **3.14**; packages like `tokenizers` may not ship wheels yet and the build fails during metadata generation. This repo pins **3.11.11** via `.python-version` and `PYTHON_VERSION` in `render.yaml`. If your service still uses 3.14, set `PYTHON_VERSION=3.11.11` in the Render dashboard (it overrides `.python-version` when set).
+4. Set required env vars in Render dashboard:
    - `ALLOWED_ORIGINS=https://tejas-medtruth-app.vercel.app`
    - `MONGO_URI=<your_mongo_atlas_uri>`
    - `MONGO_DB=medtruth_ai`
@@ -22,7 +23,7 @@ Suggested service names:
    - `GROQ_API_KEY=<...>` (optional)
    - `GEMINI_API_KEY=<...>` (optional)
    - `NCBI_API_KEY=<...>` (optional)
-4. Deploy and copy backend URL, for example:
+5. Deploy and copy backend URL, for example:
    - `https://tejas-medtruth-api.onrender.com`
 
 Health check:
