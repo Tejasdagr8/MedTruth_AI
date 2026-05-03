@@ -3,6 +3,6 @@
   "installCommand": "npm ci",
   "buildCommand": "npm run build",
   "env": {
-    "NEXT_PUBLIC_API_URL": "https://medtruth-ai.onrender.com/api/v1"
+    "NEXT_PUBLIC_API_URL": "https://medtruth-ai-1.onrender.com/api/v1"
   }
 }
