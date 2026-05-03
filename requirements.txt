@@ -6,12 +6,13 @@
 #   spacy 3.7.x  pins typer<0.10 AND weasel<0.4 → upgrade to 3.8.x
 #   chromadb 0.5.x pins tokenizers<=0.20.3 → cap transformers at 4.46.3
 #   sentence-transformers 2.x requires transformers<5 → safe to upgrade to 3.x
+#   langgraph/langchain-core (Python >=3.12.4) need pydantic>=2.7.4 — not 2.7.1
 # =============================================================================
 
 # ── Core API ──────────────────────────────────────────────────────────────────
 fastapi==0.111.0
 uvicorn[standard]==0.29.0
-pydantic==2.7.1
+pydantic==2.7.4
 python-dotenv==1.0.1
 
 # ── HTTP clients ──────────────────────────────────────────────────────────────

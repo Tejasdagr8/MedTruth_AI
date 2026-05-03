@@ -1,0 +1,14 @@
+# FastAPI + ML stack runs on Render, not on Vercel. Excluding these avoids Vercel's
+# post-build `uv lock` on requirements.txt (Python 3.12 vs pydantic/langgraph pins).
+requirements.txt
+api/
+src/
+tests/
+data/
+Dockerfile.backend
+docker-compose.yml
+render.yaml
+pytest.ini
+ruff.toml
+.python-version
+.env.example
