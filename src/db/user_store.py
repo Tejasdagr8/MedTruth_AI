@@ -7,8 +7,8 @@ The tradeoff is that data doesn't survive process restarts when Mongo is down â€
 that's acceptable for the use case (research tool, not banking).
 
 The reconnect rate-limiting (_CONNECT_RETRY_TTL) matters more than it sounds.
-Without it, every request under Mongo outage pays a 1.5s serverSelectionTimeoutMS
-penalty, which tanks the API completely.
+Without it, every request under Mongo outage pays a serverSelectionTimeoutMS
+penalty (see MONGO_SERVER_SELECTION_TIMEOUT_MS), which tanks the API completely.
 
 Saved answers are keyed by SHA256(answer) so re-saving the same answer is idempotent.
 The hash is computed on the full answer text, not the query, so the same query can
@@ -23,9 +23,10 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
-from pymongo import MongoClient
 from pymongo.collection import Collection
 from pymongo.errors import PyMongoError
+
+from src.db.mongo_connection import create_mongo_client
 
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
@@ -52,7 +53,7 @@ class UserStore:
     def _connect(self) -> None:
         self._last_connect_attempt = time.monotonic()
         try:
-            self._client = MongoClient(self._mongo_uri, serverSelectionTimeoutMS=1500)
+            self._client = create_mongo_client(self._mongo_uri)
             self._db = self._client[self._db_name]
             # Fail fast when Mongo is unreachable instead of lazily failing on first write.
             self._client.admin.command("ping")

@@ -18,9 +18,11 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import Any
 
-from pymongo import DESCENDING, MongoClient
+from pymongo import DESCENDING
 from pymongo.collection import Collection
 from pymongo.errors import PyMongoError
+
+from src.db.mongo_connection import create_mongo_client
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +46,7 @@ class _FailureStore:
     def _connect(self) -> None:
         self._last_attempt = time.monotonic()
         try:
-            client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=1500)
+            client = create_mongo_client(MONGO_URI)
             client.admin.command("ping")
             col = client[MONGO_DB]["query_failures"]
             col.create_index([("timestamp", DESCENDING)])

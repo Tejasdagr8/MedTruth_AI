@@ -20,6 +20,9 @@ services:
         sync: false
       - key: MONGO_DB
         value: medtruth_ai
+      # Optional: set to "true" if Atlas TLS handshake fails on Render (OCSP / egress).
+      - key: MONGO_TLS_DISABLE_OCSP
+        sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: GROQ_API_KEY
