@@ -465,7 +465,10 @@ MedTruth_AI/
 ├── render.yaml                        # Render web service (Python 3.11, build/start commands)
 ├── DEPLOYMENT.md                      # Vercel + Render env var checklist
 ├── requirements.txt
-├── pyproject.toml
+├── pytest.ini
+├── ruff.toml
+├── vercel.json                        # Monorepo root: build frontend/ for Vercel
+├── package.json                       # Root stub so Vercel does not treat repo as Python-only
 └── .env.example
 ```
 

@@ -1,0 +1,11 @@
+{
+  "name": "medtruth-ai-monorepo",
+  "private": true,
+  "description": "Root package so Vercel builds Next.js from frontend/ when the Git root is this repo.",
+  "scripts": {
+    "vercel-build": "cd frontend && npm ci && npm run build"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
