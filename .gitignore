@@ -23,3 +23,6 @@ frontend/.next/
 
 # Frontend local env
 frontend/.env.local
+
+# Vercel CLI link (local); recreate with: cd frontend && vercel link --yes --project med-truth-ai
+frontend/.vercel/
